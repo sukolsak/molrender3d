@@ -41,7 +41,7 @@ function addBasicArgs(currParser: argparse.ArgumentParser, isDir: boolean) {
     });
     currParser.addArgument([ '--format' ], {
         action: 'store',
-        help: 'image format (png or jpeg)',
+        help: 'image format (png, jpeg, obj, or glb)',
         defaultValue: 'png'
     });
 }

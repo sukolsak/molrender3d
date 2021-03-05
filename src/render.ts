@@ -1,8 +1,9 @@
 /**
- * Copyright (c) 2019-2020 mol* contributors, licensed under MIT, See LICENSE file for more info.
+ * Copyright (c) 2019-2021 mol* contributors, licensed under MIT, See LICENSE file for more info.
  *
  * @author Alexander Rose <alexander.rose@weirdbyte.de>
  * @author Jesse Liang <jesse.liang@rcsb.org>
+ * @author Sukolsak Sakshuwong <sukolsak@stanford.edu>
  */
 
 import getGLContext = require('gl')
@@ -27,14 +28,17 @@ import { MolScriptBuilder as MS } from 'molstar/lib/mol-script/language/builder'
 import { StructureSelectionQueries as Q } from 'molstar/lib/mol-plugin-state/helpers/structure-selection-query';
 import { ImagePass } from 'molstar/lib/mol-canvas3d/passes/image';
 import { PrincipalAxes } from 'molstar/lib/mol-math/linear-algebra/matrix/principal-axes';
-import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { Vec3, Mat3, Mat4, EPSILON } from 'molstar/lib/mol-math/linear-algebra';
+import { Box3D } from 'molstar/lib/mol-math/geometry/primitives/box3d';
 import Expression from 'molstar/lib/mol-script/language/expression';
 import { VisualQuality } from 'molstar/lib/mol-geo/geometry/base';
 import { getStructureQuality } from 'molstar/lib/mol-repr/util';
+import { Color } from 'molstar/lib/mol-util/color/color';
 import { ColorNames } from 'molstar/lib/mol-util/color/names';
 import { Camera } from 'molstar/lib/mol-canvas3d/camera';
 import { SyncRuntimeContext } from 'molstar/lib/mol-task/execution/synchronous';
 import { AssetManager } from 'molstar/lib/mol-util/assets';
+import { Mesh, exportObj, exportGlb } from './3d-exporter';
 
 /**
  * Helper method to create PNG with given PNG data
@@ -49,6 +53,22 @@ async function writeJpegFile(jpeg: JPEG.BufferRet, outPath: string) {
     await new Promise<void>(resolve => {
         fs.writeFile(outPath, jpeg.data, () => resolve())
     })
+}
+
+async function writeObjFile(obj: string, objOutPath: string, mtl: string, mtlOutPath: string) {
+    await Promise.all([
+        new Promise<void>(resolve => {
+            fs.writeFile(objOutPath, obj, () => resolve());
+        }),
+        new Promise<void>(resolve => {
+            fs.writeFile(mtlOutPath, mtl, () => resolve());
+        })
+    ]);
+}
+async function writeGlbFile(glb: Buffer, outPath: string) {
+    await new Promise<void>(resolve => {
+        fs.writeFile(outPath, glb, () => resolve());
+    });
 }
 
 const tmpMatrixPos = Vec3.zero()
@@ -137,7 +157,7 @@ export class ImageRenderer {
     imagePass: ImagePass
     assetManager = new AssetManager()
 
-    constructor(private width: number, private height: number, private format: 'png' | 'jpeg') {
+    constructor(private width: number, private height: number, private format: 'png' | 'jpeg' | 'obj' | 'glb') {
         this.gl = getGLContext(this.width, this.height, {
             alpha: false,
             antialias: true,
@@ -241,9 +261,164 @@ export class ImageRenderer {
     }
 
     /**
-     * Creates PNG with the current 3dcanvas data
+     * Creates OBJ/GLB with the current 3dcanvas data
      */
+    async create3DModel(outPath: string) {
+        this.canvas3d.commit(true);
+
+        // Group meshes by color and remove unused vertices.
+        const meshByColor = new Map<Color, Mesh>();
+        const transform = Mat4();
+        const directionTransform = Mat3();
+        const normalizeIfNecessary = (v: Vec3) => {
+            const squaredMagnitude = Vec3.squaredMagnitude(v);
+            if (squaredMagnitude < 1 - EPSILON || squaredMagnitude > 1 + EPSILON) {
+                Vec3.scale(v, v, 1 / Math.sqrt(squaredMagnitude));
+            }
+        };
+        const renderables = (<any>this.imagePass.drawPass).scene.renderables; // FIXME: Access the scene properly.
+        for (const renderable of renderables) {
+            const positions = renderable.values.aPosition.ref.value;
+            const normals = renderable.values.aNormal.ref.value;
+            const faces = renderable.values.elements.ref.value;
+            const colorType = renderable.values.dColorType.ref.value;
+            const colors = renderable.values.tColor.ref.value.array;
+            const drawCount = renderable.values.drawCount.ref.value;
+            const instanceCount = renderable.values.instanceCount.ref.value;
+            const transforms = renderable.values.aTransform.ref.value;
+            for (let instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
+                Mat4.fromArray(transform, transforms, instanceIndex * 16);
+                Mat3.directionTransform(directionTransform, transform);
+                const isIdentity = Mat4.isIdentity(transform);
+
+                if (colorType === 'instance') {
+                    const instance = renderable.values.aInstance.ref.value[instanceIndex];
+                    const color = Color.fromArray(colors, instance * 3);
+                    let mesh = meshByColor.get(color);
+                    if (mesh === undefined) {
+                        mesh = { positions: [], normals: [], faces: [] };
+                        meshByColor.set(color, mesh);
+                    }
+                    const { positions: positions2, normals: normals2, faces: faces2 } = mesh;
+                    const vMap = new Map<number, number>();
+                    for (let i = 0; i < drawCount; ++i) {
+                        const vi = faces[i];
+                        let vi2 = vMap.get(vi);
+                        if (vi2 === undefined) {
+                            vi2 = positions2.length;
+                            vMap.set(vi, vi2);
+                            const position = positions.slice(vi * 3, vi * 3 + 3);
+                            const normal = normals.slice(vi * 3, vi * 3 + 3);
+                            normalizeIfNecessary(normal);
+                            if (!isIdentity) {
+                                Vec3.transformMat4(position, position, transform);
+                                Vec3.transformMat3(normal, normal, directionTransform);
+                            }
+                            positions2.push(position);
+                            normals2.push(normal);
+                        }
+                        faces2.push(vi2);
+                    }
+                } else if (colorType === 'group') {
+                    const groups = renderable.values.aGroup.ref.value;
+                    const colorToVMap = new Map<Color, Map<number, number>>();
+                    for (let i = 0; i < drawCount; i += 3) {
+                        const group = groups[faces[i]];
+                        const color = Color.fromArray(colors, group * 3); // We assume that each face has a uniform color.
+                        let mesh = meshByColor.get(color);
+                        if (mesh === undefined) {
+                            mesh = { positions: [], normals: [], faces: [] };
+                            meshByColor.set(color, mesh);
+                        }
+                        const { positions: positions2, normals: normals2, faces: faces2 } = mesh;
+                        let vMap = colorToVMap.get(color);
+                        if (vMap === undefined) {
+                            vMap = new Map<number, number>();
+                            colorToVMap.set(color, vMap);
+                        }
+                        for (let j = 0; j < 3; ++j) {
+                            const vi = faces[i + j];
+                            let vi2 = vMap.get(vi);
+                            if (vi2 === undefined) {
+                                vi2 = positions2.length;
+                                vMap.set(vi, vi2);
+                                const position = positions.slice(vi * 3, vi * 3 + 3);
+                                const normal = normals.slice(vi * 3, vi * 3 + 3);
+                                normalizeIfNecessary(normal);
+                                if (!isIdentity) {
+                                    Vec3.transformMat4(position, position, transform);
+                                    Vec3.transformMat3(normal, normal, directionTransform);
+                                }
+                                positions2.push(position);
+                                normals2.push(normal);
+                            }
+                            faces2.push(vi2);
+                        }
+
+                    }
+                } else {
+                    throw new Error(`Color type '${colorType}' is currently not supported`);
+                }
+            }
+        }
+
+        // Rotate the model according to the camera's orientation.
+        const up = Vec3();
+        const forward = Vec3();
+        const right = Vec3();
+        const cameraState = this.canvas3d.camera.state;
+        Vec3.normalize(up, cameraState.up);
+        Vec3.normalize(forward, Vec3.sub(forward, cameraState.position, cameraState.target));
+        Vec3.cross(right, up, forward);
+        const rotationMatrix = Mat3.create(
+            right[0], up[0], forward[0],
+            right[1], up[1], forward[1],
+            right[2], up[2], forward[2],
+        );
+        meshByColor.forEach(mesh => {
+            for (const position of mesh.positions) {
+                Vec3.transformMat3(position, position, rotationMatrix);
+            }
+            for (const normal of mesh.normals) {
+                Vec3.transformMat3(normal, normal, rotationMatrix);
+            }
+        });
+
+        // Translate and scale the model so that it sits on the y=0 plane and fits within the view.
+        const box = Box3D();
+        Box3D.setEmpty(box);
+        meshByColor.forEach(mesh => {
+            for (const position of mesh.positions) {
+                Box3D.add(box, position);
+            }
+        });
+        const translate = Vec3.create(-(box.min[0] + box.max[0]) / 2, -box.min[1], -(box.min[2] + box.max[2]) / 2);
+        const size = Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]);
+        const scale = (this.format === 'glb') ? Math.min(0.4 / size, 0.01) : 1;
+        meshByColor.forEach(mesh => {
+            for (const position of mesh.positions) {
+                Vec3.add(position, position, translate);
+                Vec3.scale(position, position, scale);
+            }
+        });
+
+        if (this.format === 'obj') {
+            const outPathComponents = outPath.split(/\/|\\/);
+            const outName = outPathComponents[outPathComponents.length - 1];
+            const { obj, mtl } = exportObj(meshByColor, outName);
+            await writeObjFile(obj, `${outPath}.obj`, mtl, `${outPath}.mtl`);
+        } else if (this.format === 'glb') {
+            const glb = exportGlb(meshByColor);
+            await writeGlbFile(glb, `${outPath}.glb`);
+        }
+    }
+
     async createImage(outPath: string, size: StructureSize) {
+        if (this.format === 'obj' || this.format === 'glb') {
+            await this.create3DModel(outPath);
+            return;
+        }
+
         const occlusion = size === StructureSize.Big ? { name: 'on' as const, params: {
             kernelSize: 4,
             bias: 0.5,
