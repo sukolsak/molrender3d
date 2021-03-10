@@ -1,14 +1,14 @@
 {
-  "name": "molrender",
+  "name": "molrender3d",
   "version": "0.4.1",
-  "description": "Create macromolecular images.",
-  "homepage": "https://github.com/molstar/molrender#readme",
+  "description": "Create macromolecular images and 3D models.",
+  "homepage": "https://github.com/sukolsak/molrender3d#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/molstar/molrender.git"
+    "url": "https://github.com/sukolsak/molrender3d.git"
   },
   "bugs": {
-    "url": "https://github.com/molstar/molrender/issues"
+    "url": "https://github.com/sukolsak/molrender3d/issues"
   },
   "scripts": {
     "test": "npm run lint",
@@ -24,10 +24,10 @@
     "postversion": "git push && git push --tags"
   },
   "bin": {
-    "molrender": "build/bin/molrender.js"
+    "molrender3d": "build/bin/molrender3d.js"
   },
   "files": [
-    "build/bin/molrender.js"
+    "build/bin/molrender3d.js"
   ],
   "author": "Mol* Contributors",
   "license": "MIT",

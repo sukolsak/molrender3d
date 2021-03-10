@@ -29,6 +29,6 @@ module.exports = [
             ],
         },
         entry: path.resolve(__dirname, `build/src/index.js`),
-        output: { filename: `molrender.js`, path: path.resolve(__dirname, `build/bin`) },
+        output: { filename: `molrender3d.js`, path: path.resolve(__dirname, `build/bin`) },
     }
 ]
