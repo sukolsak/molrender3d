@@ -2,7 +2,7 @@
 
 [![License](http://img.shields.io/badge/license-MIT-blue.svg?style=flat)](./LICENSE)
 
-A tool for creating macromolecular images and 3D models. It is based on [molrender](https://github.com/molstar/molrender), which is based on [Mol\*](https://github.com/molstar/molstar). It can create PNG, JPEG, OBJ, and GLB files.
+A tool for creating macromolecular images and 3D models. It is based on [molrender](https://github.com/molstar/molrender), which is based on [Mol\*](https://github.com/molstar/molstar). It can create PNG, JPEG, OBJ, GLB, and USDZ files.
 
 The tool is being used on [MolAR](https://stanford.edu/~sukolsak/ar/) to create 3D models of proteins for augmented reality.
 
@@ -19,7 +19,7 @@ The `options` are
 
     --width WIDTH    image height
     --height HEIGHT  image width
-    --format FORMAT  image format (png, jpeg, obj, or glb)
+    --format FORMAT  image format (png, jpeg, obj, glb, or usdz)
 
 For example, the following command will create `6vxx.obj` in the `out` folder. The `6vxx.cif` file (structure data of SARS-CoV-2 spike glycoprotein) can be downloaded from https://files.rcsb.org/download/6vxx.cif.
 

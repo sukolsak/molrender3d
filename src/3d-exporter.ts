@@ -6,6 +6,7 @@
 
 import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { Color } from 'molstar/lib/mol-util/color/color';
+import { ValueType, UsdAttribute, UsdData, CrateFile } from './usdz';
 
 function computeBounding(points: Vec3[]) {
     const min = Vec3.create(Number.MAX_VALUE, Number.MAX_VALUE, Number.MAX_VALUE);
@@ -206,4 +207,67 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
         binaryChunk
     ]);
     return glb;
+}
+
+export function exportUsdz(meshByColor: Map<Color, Mesh>) {
+    const root = new UsdData('', '');
+    const usdObj = root.createChild('ar', 'Xform');
+    usdObj.metadata['assetInfo'] = {'name': 'ar'};
+    usdObj.metadata['kind'] = 'component';
+
+    const materials_scope = usdObj.createChild('Materials', 'Scope');
+
+    let refId = 0;
+
+    const vecsToFloatArray = (v: number[][]) => {
+        const a = new Float32Array(v.length * 3);
+        for (let i = 0; i < v.length; ++i) {
+            a[i * 3] = v[i][0];
+            a[i * 3 + 1] = v[i][1];
+            a[i * 3 + 2] = v[i][2];
+        }
+        return a;
+    };
+
+    meshByColor.forEach((mesh, color) => {
+        const { positions, normals, faces } = mesh;
+        const positions2 = vecsToFloatArray(positions);
+        const normals2 = vecsToFloatArray(normals);
+        const faceVertexCounts = new Uint32Array(faces.length / 3);
+        faceVertexCounts.fill(3);
+
+        const rgb = new Float32Array(Color.toRgbNormalized(color));
+        const usdMaterial = materials_scope.createChild('k' + String(refId), 'Material');
+
+        const usdShader = usdMaterial.createChild('surfaceShader', 'Shader');
+        const infoIdAtt = new UsdAttribute('info:id', 'UsdPreviewSurface', ValueType.token, 'token');
+        infoIdAtt.addQualifier('uniform');
+        usdShader.addAttribute(infoIdAtt);
+        usdShader.addAttribute(new UsdAttribute('inputs:diffuseColor', rgb, ValueType.vec3f, 'color3f'));
+        usdShader.addAttribute(new UsdAttribute('inputs:roughness', 0.2, ValueType.float, 'float'));
+        const surface = new UsdAttribute('outputs:surface', null, ValueType.token, 'token');
+        usdShader.addAttribute(surface);
+
+        usdMaterial.addAttribute(new UsdAttribute('outputs:surface', surface, ValueType.Invalid, 'token'));
+
+        const usdMesh = usdObj.createChild('m' + String(refId), 'Mesh');
+        usdMesh.addAttribute(new UsdAttribute('material:binding', usdMaterial, ValueType.Invalid, 'rel'));
+        usdMesh.addAttribute(new UsdAttribute('doubleSided', false, ValueType.bool, 'bool'));
+        usdMesh.addAttribute(new UsdAttribute('faceVertexCounts', faceVertexCounts, ValueType.int, 'int[]', true));
+        usdMesh.addAttribute(new UsdAttribute('faceVertexIndices', faces, ValueType.int, 'int[]', true));
+        usdMesh.addAttribute(new UsdAttribute('points', positions2, ValueType.vec3f, 'point3f[]', true));
+        const normalsAtt = new UsdAttribute('primvars:normals', normals2, ValueType.vec3f, 'normal3f[]', true);
+        normalsAtt.metadata['interpolation'] = 'vertex';
+        usdMesh.addAttribute(normalsAtt);
+        const subdivAtt = new UsdAttribute('subdivisionScheme', 'none', ValueType.token, 'token');
+        subdivAtt.addQualifier('uniform');
+        usdMesh.addAttribute(subdivAtt);
+
+        refId++;
+    });
+
+    const crateFile = new CrateFile();
+    crateFile.writeUsd(root);
+    const usdz = crateFile.getUsdz();
+    return Buffer.from(usdz.buffer);
 }

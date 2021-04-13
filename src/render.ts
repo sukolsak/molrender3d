@@ -38,7 +38,7 @@ import { ColorNames } from 'molstar/lib/mol-util/color/names';
 import { Camera } from 'molstar/lib/mol-canvas3d/camera';
 import { SyncRuntimeContext } from 'molstar/lib/mol-task/execution/synchronous';
 import { AssetManager } from 'molstar/lib/mol-util/assets';
-import { Mesh, exportObj, exportGlb } from './3d-exporter';
+import { Mesh, exportObj, exportGlb, exportUsdz } from './3d-exporter';
 
 /**
  * Helper method to create PNG with given PNG data
@@ -65,9 +65,9 @@ async function writeObjFile(obj: string, objOutPath: string, mtl: string, mtlOut
         })
     ]);
 }
-async function writeGlbFile(glb: Buffer, outPath: string) {
+async function writeFile(data: Buffer, outPath: string) {
     await new Promise<void>(resolve => {
-        fs.writeFile(outPath, glb, () => resolve());
+        fs.writeFile(outPath, data, () => resolve());
     });
 }
 
@@ -157,7 +157,7 @@ export class ImageRenderer {
     imagePass: ImagePass
     assetManager = new AssetManager()
 
-    constructor(private width: number, private height: number, private format: 'png' | 'jpeg' | 'obj' | 'glb') {
+    constructor(private width: number, private height: number, private format: 'png' | 'jpeg' | 'obj' | 'glb' | 'usdz') {
         this.gl = getGLContext(this.width, this.height, {
             alpha: false,
             antialias: true,
@@ -261,7 +261,7 @@ export class ImageRenderer {
     }
 
     /**
-     * Creates OBJ/GLB with the current 3dcanvas data
+     * Creates OBJ/GLB/USDZ with the current 3dcanvas data
      */
     async create3DModel(outPath: string) {
         this.canvas3d.commit(true);
@@ -394,7 +394,7 @@ export class ImageRenderer {
         });
         const translate = Vec3.create(-(box.min[0] + box.max[0]) / 2, -box.min[1], -(box.min[2] + box.max[2]) / 2);
         const size = Math.max(box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]);
-        const scale = (this.format === 'glb') ? Math.min(0.4 / size, 0.01) : 1;
+        const scale = (this.format === 'glb') ? Math.min(0.4 / size, 0.01) : (this.format === 'usdz') ? Math.min(40 / size, 1) : 1;
         meshByColor.forEach(mesh => {
             for (const position of mesh.positions) {
                 Vec3.add(position, position, translate);
@@ -409,12 +409,15 @@ export class ImageRenderer {
             await writeObjFile(obj, `${outPath}.obj`, mtl, `${outPath}.mtl`);
         } else if (this.format === 'glb') {
             const glb = exportGlb(meshByColor);
-            await writeGlbFile(glb, `${outPath}.glb`);
+            await writeFile(glb, `${outPath}.glb`);
+        } else if (this.format === 'usdz') {
+            const usdz = exportUsdz(meshByColor);
+            await writeFile(usdz, `${outPath}.usdz`);
         }
     }
 
     async createImage(outPath: string, size: StructureSize) {
-        if (this.format === 'obj' || this.format === 'glb') {
+        if (this.format === 'obj' || this.format === 'glb' || this.format === 'usdz') {
             await this.create3DModel(outPath);
             return;
         }
