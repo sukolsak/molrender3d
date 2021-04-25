@@ -39,6 +39,8 @@ import { Camera } from 'molstar/lib/mol-canvas3d/camera';
 import { SyncRuntimeContext } from 'molstar/lib/mol-task/execution/synchronous';
 import { AssetManager } from 'molstar/lib/mol-util/assets';
 import { Mesh, exportObj, exportGlb, exportUsdz } from './3d-exporter';
+import { GraphicsRenderObject } from 'molstar/lib/mol-gl/render-object';
+import { MeshValues } from 'molstar/lib/mol-gl/renderable/mesh';
 
 /**
  * Helper method to create PNG with given PNG data
@@ -276,23 +278,24 @@ export class ImageRenderer {
                 Vec3.scale(v, v, 1 / Math.sqrt(squaredMagnitude));
             }
         };
-        const renderables = (<any>this.imagePass.drawPass).scene.renderables; // FIXME: Access the scene properly.
+        const renderables = <GraphicsRenderObject[]>(<any>this.imagePass.drawPass).scene.renderables; // FIXME: Access the scene properly.
         for (const renderable of renderables) {
-            const positions = renderable.values.aPosition.ref.value;
-            const normals = renderable.values.aNormal.ref.value;
-            const faces = renderable.values.elements.ref.value;
-            const colorType = renderable.values.dColorType.ref.value;
-            const colors = renderable.values.tColor.ref.value.array;
-            const drawCount = renderable.values.drawCount.ref.value;
-            const instanceCount = renderable.values.instanceCount.ref.value;
-            const transforms = renderable.values.aTransform.ref.value;
+            const values = renderable.values as MeshValues;
+            const positions = values.aPosition.ref.value;
+            const normals = values.aNormal.ref.value;
+            const faces = values.elements.ref.value;
+            const colorType = values.dColorType.ref.value;
+            const colors = values.tColor.ref.value.array;
+            const drawCount = values.drawCount.ref.value;
+            const instanceCount = values.instanceCount.ref.value;
+            const transforms = values.aTransform.ref.value;
             for (let instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
                 Mat4.fromArray(transform, transforms, instanceIndex * 16);
                 Mat3.directionTransform(directionTransform, transform);
                 const isIdentity = Mat4.isIdentity(transform);
 
                 if (colorType === 'instance') {
-                    const instance = renderable.values.aInstance.ref.value[instanceIndex];
+                    const instance = values.aInstance.ref.value[instanceIndex];
                     const color = Color.fromArray(colors, instance * 3);
                     let mesh = meshByColor.get(color);
                     if (mesh === undefined) {
@@ -307,8 +310,10 @@ export class ImageRenderer {
                         if (vi2 === undefined) {
                             vi2 = positions2.length;
                             vMap.set(vi, vi2);
-                            const position = positions.slice(vi * 3, vi * 3 + 3);
-                            const normal = normals.slice(vi * 3, vi * 3 + 3);
+                            const position = Vec3();
+                            const normal = Vec3();
+                            Vec3.fromArray(position, positions, vi * 3);
+                            Vec3.fromArray(normal, normals, vi * 3);
                             normalizeIfNecessary(normal);
                             if (!isIdentity) {
                                 Vec3.transformMat4(position, position, transform);
@@ -320,7 +325,7 @@ export class ImageRenderer {
                         faces2.push(vi2);
                     }
                 } else if (colorType === 'group') {
-                    const groups = renderable.values.aGroup.ref.value;
+                    const groups = values.aGroup.ref.value;
                     const colorToVMap = new Map<Color, Map<number, number>>();
                     for (let i = 0; i < drawCount; i += 3) {
                         const group = groups[faces[i]];
@@ -342,8 +347,10 @@ export class ImageRenderer {
                             if (vi2 === undefined) {
                                 vi2 = positions2.length;
                                 vMap.set(vi, vi2);
-                                const position = positions.slice(vi * 3, vi * 3 + 3);
-                                const normal = normals.slice(vi * 3, vi * 3 + 3);
+                                const position = Vec3();
+                                const normal = Vec3();
+                                Vec3.fromArray(position, positions, vi * 3);
+                                Vec3.fromArray(normal, normals, vi * 3);
                                 normalizeIfNecessary(normal);
                                 if (!isIdentity) {
                                     Vec3.transformMat4(position, position, transform);
