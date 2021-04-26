@@ -67,7 +67,7 @@ async function writeObjFile(obj: string, objOutPath: string, mtl: string, mtlOut
         })
     ]);
 }
-async function writeFile(data: Buffer, outPath: string) {
+async function writeFile(data: Uint8Array, outPath: string) {
     await new Promise<void>(resolve => {
         fs.writeFile(outPath, data, () => resolve());
     });

@@ -72,7 +72,7 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
     const primitives: Record<string, any>[] = [];
     const accessors: Record<string, any>[] = [];
     const bufferViews: Record<string, any>[] = [];
-    const buffers: Buffer[] = [];
+    const binaryBuffer: ArrayBuffer[] = [];
     const materials: Record<string, any>[] = [];
     let byteOffset = 0;
 
@@ -87,10 +87,10 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
     meshByColor.forEach((mesh, color) => {
         const { positions, normals, faces } = mesh;
         const accessorOffset = accessors.length;
-        const faceBuffer = Buffer.from(new Uint32Array(faces).buffer);
-        const positionBuffer = Buffer.from(flattenVec3s(positions).buffer);
-        const normalBuffer = Buffer.from(flattenVec3s(normals).buffer);
-        buffers.push(faceBuffer, positionBuffer, normalBuffer);
+        const faceBuffer = new Uint32Array(faces).buffer;
+        const positionBuffer = flattenVec3s(positions).buffer;
+        const normalBuffer = flattenVec3s(normals).buffer;
+        binaryBuffer.push(faceBuffer, positionBuffer, normalBuffer);
         const materialOffset = materials.length;
         const { min: positionMin, max: positionMax } = computeBounding(positions);
 
@@ -106,36 +106,36 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
         bufferViews.push({
             'buffer': 0,
             'byteOffset': byteOffset,
-            'byteLength': faceBuffer.length,
-            'target': 34963
+            'byteLength': faceBuffer.byteLength,
+            'target': 34963 // ELEMENT_ARRAY_BUFFER
         });
-        byteOffset += faceBuffer.length;
+        byteOffset += faceBuffer.byteLength;
         bufferViews.push({
             'buffer': 0,
             'byteOffset': byteOffset,
-            'byteLength': positionBuffer.length,
-            'target': 34962
+            'byteLength': positionBuffer.byteLength,
+            'target': 34962 // ARRAY_BUFFER
         });
-        byteOffset += positionBuffer.length;
+        byteOffset += positionBuffer.byteLength;
         bufferViews.push({
             'buffer': 0,
             'byteOffset': byteOffset,
-            'byteLength': normalBuffer.length,
-            'target': 34962
+            'byteLength': normalBuffer.byteLength,
+            'target': 34962 // ARRAY_BUFFER
         });
-        byteOffset += normalBuffer.length;
+        byteOffset += normalBuffer.byteLength;
 
         accessors.push({
             'bufferView': accessorOffset,
             'byteOffset': 0,
-            'componentType': 5125, // unsigned int
+            'componentType': 5125, // UNSIGNED_INT
             'count': faces.length,
             'type': 'SCALAR'
         });
         accessors.push({
             'bufferView': accessorOffset + 1,
             'byteOffset': 0,
-            'componentType': 5126, // float
+            'componentType': 5126, // FLOAT
             'count': positions.length,
             'type': 'VEC3',
             'max': positionMax,
@@ -144,7 +144,7 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
         accessors.push({
             'bufferView': accessorOffset + 2,
             'byteOffset': 0,
-            'componentType': 5126, // float
+            'componentType': 5126, // FLOAT
             'count': normals.length,
             'type': 'VEC3'
         });
@@ -158,7 +158,7 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
             }
         });
     });
-    const binaryBuffer = Buffer.concat(buffers);
+    const binaryBufferLength = byteOffset;
 
     const gltf = {
         'asset': {
@@ -174,38 +174,52 @@ export function exportGlb(meshByColor: Map<Color, Mesh>) {
             'primitives': primitives
         }],
         'buffers': [{
-            'byteLength': binaryBuffer.length,
+            'byteLength': binaryBufferLength,
         }],
         'bufferViews': bufferViews,
         'accessors': accessors,
         'materials': materials
     };
 
-    const createChunk = (chunkType: number, buf: Buffer, padChar: number) => {
-        let bufBytes = buf.length;
+    const createChunk = (chunkType: number, buf: ArrayBuffer[], byteLength: number, padChar: number): [ArrayBuffer[], number] => {
         let padding = null;
-        if (bufBytes % 4 !== 0) {
-            const pad = 4 - (bufBytes % 4);
-            bufBytes += pad;
-            padding = Buffer.alloc(pad, padChar);
+        if (byteLength % 4 !== 0) {
+            const pad = 4 - (byteLength % 4);
+            byteLength += pad;
+            padding = new Uint8Array(pad);
+            padding.fill(padChar);
         }
-        const tmp = [Buffer.from(new Uint32Array([bufBytes, chunkType]).buffer), buf];
+        const tmp = [new Uint32Array([byteLength, chunkType]).buffer, ...buf];
         if (padding) {
-            tmp.push(padding);
+            tmp.push(padding.buffer);
         }
-        return Buffer.concat(tmp);
+        return [ tmp, byteLength + 8 ];
     };
-    const jsonChunk = createChunk(0x4E4F534A, Buffer.from(JSON.stringify(gltf)), 0x20);
-    const binaryChunk = createChunk(0x004E4942, binaryBuffer, 0x00);
-    const glb = Buffer.concat([
-        Buffer.from(new Uint32Array([
+    const jsonString = JSON.stringify(gltf);
+    const jsonBuffer = new Uint8Array(jsonString.length);
+    for (let i = 0, il = jsonString.length; i < il; ++i) {
+        jsonBuffer[i] = jsonString.charCodeAt(i);
+    }
+
+    const [ jsonChunk, jsonChunkLength ] = createChunk(0x4E4F534A, [jsonBuffer.buffer], jsonBuffer.length, 0x20);
+    const [ binaryChunk, binaryChunkLength ] = createChunk(0x004E4942, binaryBuffer, binaryBufferLength, 0x00);
+    const glbBufferLength = 12 + jsonChunkLength + binaryChunkLength;
+    const glbBuffer = [
+        new Uint32Array([
             0x46546C67, // magic number "gltf"
             0x00000002, // version
-            12 + jsonChunk.length + binaryChunk.length // total length
-        ]).buffer),
-        jsonChunk,
-        binaryChunk
-    ]);
+            glbBufferLength
+        ]).buffer,
+        ...jsonChunk,
+        ...binaryChunk
+    ];
+
+    const glb = new Uint8Array(glbBufferLength);
+    let offset = 0;
+    for (const buffer of glbBuffer) {
+        glb.set(new Uint8Array(buffer), offset);
+        offset += buffer.byteLength;
+    }
     return glb;
 }
 
@@ -269,5 +283,5 @@ export function exportUsdz(meshByColor: Map<Color, Mesh>) {
     const crateFile = new CrateFile();
     crateFile.writeUsd(root);
     const usdz = crateFile.getUsdz();
-    return Buffer.from(usdz.buffer);
+    return usdz;
 }
